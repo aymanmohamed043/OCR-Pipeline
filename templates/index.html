@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OCR Studio</title>
+    <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+    <main class="container">
+        <header class="hero">
+            <h1>OCR Studio</h1>
+            <p>Upload an image and get clean extracted text instantly.</p>
+        </header>
+
+        <section class="card">
+            <form id="ocr-form">
+                <label class="label" for="file-input">Image file</label>
+                <input id="file-input" name="file" type="file" accept="image/*" required />
+
+                <label class="label" for="engine-select">OCR model</label>
+                <select id="engine-select" name="engine" aria-label="OCR model">
+                    <option value="tesseract" selected>Tesseract</option>
+                    <option value="paddle">PaddleOCR</option>
+                </select>
+
+                <div id="paddle-lang-row" class="paddle-lang-row" hidden>
+                    <label class="label" for="paddle-lang-select">PaddleOCR language</label>
+                    <select id="paddle-lang-select" name="paddle_lang" aria-label="PaddleOCR language">
+                        <option value="en" selected>English (en)</option>
+                        <option value="ar">Arabic (ar)</option>
+                        <option value="ch">Chinese — Simplified (ch)</option>
+                        <option value="chinese_cht">Chinese — Traditional (chinese_cht)</option>
+                        <option value="japan">Japanese (japan)</option>
+                        <option value="korean">Korean (korean)</option>
+                        <option value="fr">French (fr)</option>
+                        <option value="de">German (de)</option>
+                        <option value="es">Spanish (es)</option>
+                        <option value="ru">Russian (ru)</option>
+                        <option value="th">Thai (th)</option>
+                        <option value="hi">Hindi (hi)</option>
+                    </select>
+                </div>
+
+                <label class="label" for="config-input" id="config-label">Tesseract options (optional)</label>
+                <input id="config-input" name="config" type="text" placeholder="e.g. --psm 6" />
+
+                <button id="submit-btn" type="submit">Run OCR</button>
+            </form>
+        </section>
+
+        <section class="grid">
+            <article class="card">
+                <h2>Image Preview</h2>
+                <img id="preview" alt="Image preview" />
+                <p id="preview-empty">No image selected yet.</p>
+            </article>
+
+            <article class="card">
+                <h2>OCR Output</h2>
+                <div class="stats">
+                    <span id="filename">File: -</span>
+                    <span id="engine-used">Model: -</span>
+                    <span id="line-count">Lines: 0</span>
+                    <span id="char-count">Characters: 0</span>
+                </div>
+                <textarea id="output-text" readonly placeholder="Recognized text will appear here..."></textarea>
+                <div class="actions">
+                    <button id="copy-btn" type="button">Copy text</button>
+                </div>
+                <p id="status" class="status"></p>
+            </article>
+        </section>
+    </main>
+
+    <script>
+        function formatErrorDetail(detail) {
+            if (typeof detail === "string") {
+                return detail;
+            }
+            if (Array.isArray(detail)) {
+                return detail.map((e) => e.msg || JSON.stringify(e)).join(" ");
+            }
+            if (detail && typeof detail === "object") {
+                return detail.message || JSON.stringify(detail);
+            }
+            return "OCR request failed.";
+        }
+
+        const form = document.getElementById("ocr-form");
+        const fileInput = document.getElementById("file-input");
+        const engineSelect = document.getElementById("engine-select");
+        const paddleLangRow = document.getElementById("paddle-lang-row");
+        const paddleLangSelect = document.getElementById("paddle-lang-select");
+        const configInput = document.getElementById("config-input");
+        const configLabel = document.getElementById("config-label");
+        const preview = document.getElementById("preview");
+        const previewEmpty = document.getElementById("preview-empty");
+        const submitBtn = document.getElementById("submit-btn");
+        const outputText = document.getElementById("output-text");
+        const statusText = document.getElementById("status");
+        const filename = document.getElementById("filename");
+        const lineCount = document.getElementById("line-count");
+        const charCount = document.getElementById("char-count");
+        const engineUsed = document.getElementById("engine-used");
+        const copyBtn = document.getElementById("copy-btn");
+
+        function syncConfigUi() {
+            const engine = engineSelect.value;
+            paddleLangRow.hidden = engine !== "paddle";
+            if (engine === "paddle") {
+                configLabel.textContent = "Paddle options (optional, reserved)";
+                configInput.placeholder = "Reserved for future Paddle settings";
+            } else {
+                configLabel.textContent = "Tesseract options (optional)";
+                configInput.placeholder = "e.g. --psm 6";
+            }
+        }
+
+        engineSelect.addEventListener("change", syncConfigUi);
+        syncConfigUi();
+
+        fileInput.addEventListener("change", () => {
+            const file = fileInput.files?.[0];
+            if (!file) {
+                preview.removeAttribute("src");
+                preview.style.display = "none";
+                previewEmpty.style.display = "block";
+                return;
+            }
+            const objectUrl = URL.createObjectURL(file);
+            preview.src = objectUrl;
+            preview.style.display = "block";
+            previewEmpty.style.display = "none";
+        });
+
+        copyBtn.addEventListener("click", async () => {
+            if (!outputText.value.trim()) {
+                statusText.textContent = "No text to copy yet.";
+                return;
+            }
+            await navigator.clipboard.writeText(outputText.value);
+            statusText.textContent = "Text copied to clipboard.";
+        });
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const file = fileInput.files?.[0];
+            if (!file) {
+                statusText.textContent = "Please select an image file first.";
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = "Processing...";
+            statusText.textContent = "Running OCR...";
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            const engine = engineSelect.value;
+            const configValue = configInput.value.trim();
+            const params = new URLSearchParams();
+            params.set("engine", engine);
+            if (engine === "paddle") {
+                params.set("lang", paddleLangSelect.value);
+            }
+            if (configValue) {
+                params.set("config", configValue);
+            }
+            const url = `/ocr?${params.toString()}`;
+
+            try {
+                const response = await fetch(url, {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(formatErrorDetail(data.detail));
+                }
+
+                outputText.value = data.text || "";
+                filename.textContent = `File: ${data.filename || "-"}`;
+                let modelLabel = data.engine === "paddle" ? "PaddleOCR" : "Tesseract";
+                if (data.engine === "paddle" && data.paddle_lang) {
+                    modelLabel = `PaddleOCR (${data.paddle_lang})`;
+                }
+                engineUsed.textContent = `Model: ${modelLabel}`;
+                lineCount.textContent = `Lines: ${data.lines || 0}`;
+                charCount.textContent = `Characters: ${data.characters || 0}`;
+                statusText.textContent = "OCR completed successfully.";
+            } catch (error) {
+                statusText.textContent = `Error: ${error.message}`;
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = "Run OCR";
+            }
+        });
+    </script>
+</body>
+</html>
